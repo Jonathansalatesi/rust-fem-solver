@@ -1,0 +1,34 @@
+[package]
+name = "rust-fem-solver"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jonathan Salatesi"]
+description = "A 2D Finite Element Solver for collision analysis with contact boundary conditions"
+license = "MIT"
+
+[dependencies]
+ndarray = "0.15"
+ndarray-linalg = { version = "0.16", features = ["openblas-static"] }
+nalgebra = "0.32"
+sprs = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+csv = "1.3"
+hdf5 = "0.8"
+xml-rs = "0.8"
+
+[dev-dependencies]
+approx = "0.5"
+rand = "0.8"
+
+[[example]]
+name = "simple_collision"
+path = "examples/simple_collision.rs"
+
+[[example]]
+name = "abaqus_import"
+path = "examples/abaqus_import.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
