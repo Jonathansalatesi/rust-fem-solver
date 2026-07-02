@@ -1,7 +1,6 @@
 //! Type definitions for FEM solver
 
-use ndarray::{Array1, Array2};
-use std::ops::{Add, Sub, Mul, Div};
+use std::ops::{Add, Sub};
 
 /// 2D Vector type
 pub type Vector2 = [f64; 2];
