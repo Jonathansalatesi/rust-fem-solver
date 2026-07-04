@@ -1,14 +1,34 @@
 //! Contact mechanics module
 //!
 //! Handles contact and collision detection between bodies
+//! Supports both penalty method and Lagrange multiplier method
 
 mod friction;
 mod constraint;
+mod lagrange;
+mod penalty;
 
 pub use friction::FrictionModel;
 pub use constraint::ContactConstraint;
+pub use lagrange::LagrangeContactSolver;
+pub use penalty::PenaltyContactSolver;
 
 use crate::types::{NodeId, Vector2};
+
+/// Contact solving method
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ContactMethod {
+    /// Lagrange multiplier method (default, more accurate)
+    Lagrange,
+    /// Penalty method (simpler, less accurate)
+    Penalty { penalty_parameter: f64 },
+}
+
+impl Default for ContactMethod {
+    fn default() -> Self {
+        ContactMethod::Lagrange
+    }
+}
 
 /// Contact type definition
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,23 +48,37 @@ pub struct ContactBoundary {
     pub slave_surface: Vec<NodeId>,
     /// Contact type
     pub contact_type: ContactType,
-    /// Penalty parameter for contact constraints
-    pub penalty_parameter: f64,
+    /// Contact solving method
+    pub contact_method: ContactMethod,
 }
 
 impl ContactBoundary {
-    /// Create new contact boundary
+    /// Create new contact boundary with Lagrange method (default)
     pub fn new(
         master_surface: Vec<NodeId>,
         slave_surface: Vec<NodeId>,
         contact_type: ContactType,
-        penalty_parameter: f64,
     ) -> Self {
         ContactBoundary {
             master_surface,
             slave_surface,
             contact_type,
-            penalty_parameter,
+            contact_method: ContactMethod::Lagrange,
+        }
+    }
+
+    /// Create new contact boundary with custom method
+    pub fn with_method(
+        master_surface: Vec<NodeId>,
+        slave_surface: Vec<NodeId>,
+        contact_type: ContactType,
+        contact_method: ContactMethod,
+    ) -> Self {
+        ContactBoundary {
+            master_surface,
+            slave_surface,
+            contact_type,
+            contact_method,
         }
     }
 
@@ -59,6 +93,11 @@ impl ContactBoundary {
             ContactType::Frictional { friction_coefficient } => Some(friction_coefficient),
             _ => None,
         }
+    }
+
+    /// Check if using Lagrange method
+    pub fn is_lagrange_method(&self) -> bool {
+        matches!(self.contact_method, ContactMethod::Lagrange)
     }
 }
 
