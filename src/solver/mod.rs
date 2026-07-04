@@ -1,18 +1,19 @@
 //! Solver module for FEM analysis
 //!
 //! Main solver for static and dynamic analyses with contact handling
+//! Supports both Lagrange multiplier (default) and penalty methods
 
 mod linear;
 mod assembly;
-mod contact;
+mod contact_solver;
 
 pub use linear::LinearSolver;
 pub use assembly::MatrixAssembler;
-pub use contact::ContactSolver;
+pub use contact_solver::ContactSolver;
 
 use crate::mesh::Mesh;
 use crate::material::{Material, LinearElastic};
-use crate::contact::ContactBoundary;
+use crate::contact::{ContactBoundary, ContactMethod, LagrangeMultiplier, LagrangeContactSolver};
 use crate::output::{VtkWriter, CsvWriter, TecplotWriter};
 use crate::types::{NodeId, Vector2, BoundaryCondition};
 use crate::Result;
@@ -29,6 +30,8 @@ pub struct Solver {
     point_loads: HashMap<NodeId, Vector2>,
     contact_boundaries: Vec<ContactBoundary>,
     thickness: f64,
+    /// Lagrange multipliers for active contacts
+    lagrange_multipliers: Vec<LagrangeMultiplier>,
 }
 
 impl Solver {
@@ -46,6 +49,7 @@ impl Solver {
             point_loads: HashMap::new(),
             contact_boundaries: Vec::new(),
             thickness: 1.0,
+            lagrange_multipliers: Vec::new(),
         }
     }
 
@@ -120,6 +124,11 @@ impl Solver {
         }
     }
 
+    /// Get Lagrange multipliers
+    pub fn lagrange_multipliers(&self) -> &[LagrangeMultiplier] {
+        &self.lagrange_multipliers
+    }
+
     /// Assemble global stiffness matrix
     fn assemble_stiffness_matrix(&self) -> Array2<f64> {
         MatrixAssembler::assemble_stiffness(&self.mesh, &self.material, self.thickness)
@@ -174,7 +183,7 @@ impl Solver {
         }
     }
 
-    /// Solve the system
+    /// Solve the system (basic linear solve)
     pub fn solve(&mut self) -> Result<()> {
         // Assemble system
         let mut k = self.assemble_stiffness_matrix();
@@ -189,24 +198,91 @@ impl Solver {
         Ok(())
     }
 
-    /// Solve with contact
+    /// Solve with contact using Lagrange multiplier method (default, more accurate)
     pub fn solve_with_contact(&mut self, max_iterations: usize, tolerance: f64) -> Result<()> {
-        // Iterative contact solver
-        for iteration in 0..max_iterations {
-            self.solve()?;
+        println!("\n=== Contact Solver (Lagrange Multiplier Method) ===");
+        println!("Maximum iterations: {}", max_iterations);
+        println!("Convergence tolerance: {:.2e}", tolerance);
+        
+        // Augmentation parameter (updated at each iteration)
+        let mut rho = 1.0;
 
-            let residual = ContactSolver::apply_contact(
-                self,
-                &self.contact_boundaries.clone(),
+        for iteration in 0..max_iterations {
+            // Assemble base system
+            let mut k = self.assemble_stiffness_matrix();
+            let mut f = self.assemble_force_vector();
+
+            // Apply boundary conditions
+            self.apply_boundary_conditions(&mut k, &mut f);
+
+            // Initialize Lagrange multipliers on first iteration
+            if iteration == 0 {
+                self.initialize_lagrange_multipliers()?;
+            }
+
+            // Apply contact forces via Lagrange multipliers
+            LagrangeContactSolver::apply_binding_constraint(&self.lagrange_multipliers, &mut f)?;
+
+            // Solve linear system
+            self.displacement = LinearSolver::solve(&k, &f)?;
+
+            // Update Lagrange multipliers and check convergence
+            LagrangeContactSolver::update_multipliers(
+                &mut self.lagrange_multipliers,
+                &self.displacement,
+                &self.mesh,
+                rho,
             )?;
 
+            // Calculate residual
+            let residual = self.calculate_contact_residual();
+            
+            println!("Iteration {}: residual = {:.6e}", iteration + 1, residual);
+
             if residual < tolerance {
-                println!("Contact solver converged at iteration {}", iteration);
+                println!("✓ Contact solver converged at iteration {}\n", iteration + 1);
                 break;
+            }
+
+            // Increase augmentation parameter
+            rho *= 1.2;
+        }
+
+        Ok(())
+    }
+
+    /// Initialize Lagrange multipliers for all contact boundaries
+    fn initialize_lagrange_multipliers(&mut self) -> Result<()> {
+        self.lagrange_multipliers.clear();
+
+        for contact in &self.contact_boundaries {
+            let is_binding = contact.is_binding();
+            
+            // Create Lagrange multiplier for each contact pair
+            for &slave_node in &contact.slave_surface {
+                for &master_node in &contact.master_surface {
+                    let normal = [0.0, 1.0];  // Default normal (upward)
+                    let mult = LagrangeMultiplier::new(slave_node, master_node, normal, is_binding);
+                    self.lagrange_multipliers.push(mult);
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// Calculate contact constraint residual
+    fn calculate_contact_residual(&self) -> f64 {
+        let mut residual = 0.0;
+
+        for mult in &self.lagrange_multipliers {
+            if mult.is_active() {
+                // Residual is gap constraint violation
+                residual += mult.gap.abs();
+            }
+        }
+
+        residual
     }
 
     /// Export solution to VTK format (ParaView)
